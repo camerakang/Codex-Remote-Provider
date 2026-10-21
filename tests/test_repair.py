@@ -129,4 +129,32 @@ class RepairTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    pass
+
+
+class AvailableModelTests(unittest.TestCase):
+    def test_reads_current_catalog_and_official_cache(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            (root / "catalogs").mkdir()
+            (root / "catalogs" / "relay.json").write_text(json.dumps({"models": [
+                {"slug": "claude-opus-5-5", "visibility": "list"},
+                {"slug": "hidden", "visibility": "hide"}]}), encoding="utf-8")
+            (root / "models_cache.json").write_text(json.dumps({"models": [
+                {"slug": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "visibility": "list"}]}), encoding="utf-8")
+            (root / "config.toml").write_text(
+                "model_provider = \"custom\"\nmodel_catalog_json = 'catalogs/relay.json'\nmodel = \"claude-opus-5-5\"\n"
+                "[model_providers.custom]\nmodel = \"ignored\"\n", encoding="utf-8")
+            result = repair.available_models(root)
+            self.assertEqual((result["provider"], result["model"]), ("custom", "claude-opus-5-5"))
+            self.assertEqual([[m["slug"] for m in g["models"]] for g in result["groups"]],
+                             [["claude-opus-5-5", "hidden"], ["gpt-6.1-sol"]])
+            self.assertTrue(result["groups"][0]["models"][1]["hidden"])
+            self.assertEqual([g["current"] for g in result["groups"]], [True, False])
+            (root / "config.toml").write_text("model = \"gpt-6.1-sol\"\n", encoding="utf-8")
+            result = repair.available_models(root)
+            self.assertEqual([(g["label"], g["current"]) for g in result["groups"]], [("当前方式（官方登录）", True)])
+
+
+if __name__ == "__main__":
     unittest.main()

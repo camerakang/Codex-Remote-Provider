@@ -143,7 +143,11 @@ async function captureAll(dir) {
       const host = svc.activeHosts().find((h) => h.name === 'forlinx');
       if (host) await svc.scanConversations(host.name).catch(() => {});
       await wait(500);
-      await win.webContents.executeJavaScript(`(document.querySelector('[data-act=${process.env.CRP_CAPTURE_PICK || 'model-claude'}]') || {click() {}}).click()`);
+      if (process.env.CRP_CAPTURE_TARGET) {
+        await win.webContents.executeJavaScript(`(() => { const s = document.querySelector('[data-act=model-target]'); if (s) { s.value = [...s.options].map((x) => x.value).filter((v) => v.endsWith('|' + ${JSON.stringify(process.env.CRP_CAPTURE_TARGET)})).pop() || s.value; s.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
+        await wait(300);
+      }
+      await win.webContents.executeJavaScript(`(document.querySelector('[data-act=${process.env.CRP_CAPTURE_PICK || 'model-unsupported'}]') || {click() {}}).click()`);
     }
     await wait(700);
     const img = await win.webContents.capturePage();

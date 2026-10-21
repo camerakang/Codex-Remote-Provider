@@ -167,3 +167,5 @@ td .sub { color: var(--dim); font-size: 12px; }
 .model-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .model-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--line, #333); border-radius: 6px; user-select: text; }
 .model-chip.is-target { opacity: .55; }
+.model-chip.is-bad { border-color: #b4474f; }
+.repair-controls select { min-width: 260px; }

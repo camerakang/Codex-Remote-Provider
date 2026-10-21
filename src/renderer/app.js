@@ -153,35 +153,72 @@ function providerSection(name, scan, repairable, busy) {
     </div>`;
 }
 
+function targetGroups(scan) {
+  return ((scan.available || {}).groups || []).filter((g) => g.models && g.models.some((m) => !m.hidden));
+}
+
+// Models supported by the login method (group) the target was picked from.
+function supportedSet(scan, option) {
+  const groups = targetGroups(scan);
+  const g = groups[option.group] || groups.find((x) => x.current);
+  return g ? new Set(g.models.map((m) => m.slug)) : null;
+}
+
+function defaultTarget(scan) {
+  const groups = targetGroups(scan);
+  const group = groups.findIndex((g) => g.current);
+  const conf = (scan.available || {}).model || scan.targetModel;
+  if (group >= 0) {
+    const models = groups[group].models;
+    const shown = models.filter((m) => !m.hidden);
+    return { group, target: shown.some((m) => m.slug === conf) ? conf : shown[0].slug };
+  }
+  return { group: -1, target: conf || '' };
+}
+
 function modelSection(name, scan, repairable, busy) {
   const all = [...new Set([...Object.keys(scan.models || {}), ...Object.keys(scan.dbModels || {})])].sort();
+  const groups = targetGroups(scan);
   let option = ui.modelOptions[name];
   if (!option || option.scanned !== scan) {
     const keep = option ? option.checked : new Set();
-    option = { scanned: scan, checked: new Set([...keep].filter((m) => all.includes(m))),
-      target: option && option.target ? option.target : (scan.targetModel || '') };
+    const valid = option && option.target && (!groups.length
+      || (groups[option.group] && groups[option.group].models.some((m) => m.slug === option.target)));
+    const pick = valid ? { group: option.group, target: option.target } : defaultTarget(scan);
+    option = { scanned: scan, checked: new Set([...keep].filter((m) => all.includes(m))), ...pick };
     ui.modelOptions[name] = option;
   }
+  const supported = supportedSet(scan, option);
   const checked = [...option.checked].filter((m) => m !== option.target);
   const files = scan.modelSets
     ? scan.modelSets.filter(([ms]) => ms.some((m) => checked.includes(m))).reduce((n, [, c]) => n + c, 0)
     : checked.reduce((n, m) => n + ((scan.models || {})[m] || 0), 0);
   const rows = checked.reduce((n, m) => n + ((scan.dbModels || {})[m] || 0), 0);
   const invalid = scan.invalidFiles.length;
-  const boxes = all.map((m) => `<label class="model-chip ${m === option.target ? 'is-target' : ''}">
+  const unsupported = all.filter((m) => m !== option.target && (supported ? !supported.has(m) : /claude|\//i.test(m)));
+  const boxes = all.map((m) => {
+    const bad = unsupported.includes(m);
+    return `<label class="model-chip ${m === option.target ? 'is-target' : ''} ${bad ? 'is-bad' : ''}" title="${bad ? '目标模型所在的登录方式不提供这个模型' : ''}">
       <input type="checkbox" data-act="model-pick" value="${esc(m)}" ${option.checked.has(m) && m !== option.target ? 'checked' : ''} ${m === option.target ? 'disabled' : ''}>
-      ${esc(m)} <span class="repair-sub">文件 ${(scan.models || {})[m] || 0} / 索引 ${(scan.dbModels || {})[m] || 0}</span></label>`).join('');
+      ${esc(m)} <span class="repair-sub">文件 ${(scan.models || {})[m] || 0} / 索引 ${(scan.dbModels || {})[m] || 0}</span></label>`;
+  }).join('');
+  const picker = groups.length
+    ? `<select data-act="model-target">${groups.map((g, gi) => `<optgroup label="${esc(g.label)}">${g.models.filter((m) => !m.hidden).map((m) =>
+        `<option value="${gi}|${esc(m.slug)}" ${gi === option.group && m.slug === option.target ? 'selected' : ''}>${esc(m.name)}${m.name !== m.slug ? ' · ' + esc(m.slug) : ''}</option>`).join('')}</optgroup>`).join('')}</select>`
+    : `<input type="text" data-act="model-target" value="${esc(option.target)}" placeholder="未读到模型列表，请手动填写">`;
   return `<div class="repair-step">旧对话锁定的模型</div>
-    <div class="repair-note">旧对话会记住上一轮用的模型。切到另一个登录方式后，Codex 继续对话前会先用这个旧模型压缩上下文，新账号不支持它就会报 “model is not supported”。勾选新登录方式下不可用的模型，统一改成下面的目标模型。</div>
+    <div class="repair-note">旧对话会记住上一轮用的模型。切到另一个登录方式后，Codex 继续对话前会先用这个旧模型压缩上下文，新账号不支持它就会报 “model is not supported”。先选目标模型，再勾选要改掉的旧模型；红框表示目标模型所在的登录方式不提供该模型。</div>
+    <div class="repair-controls">
+      <label>改为模型 ${picker}</label>
+    </div>
     ${all.length ? `<div class="repair-controls">
       <button class="btn" data-act="model-all" ${busy ? 'disabled' : ''}>${icon('check-check')}全选</button>
-      <button class="btn" data-act="model-claude" ${busy ? 'disabled' : ''}>${icon('filter')}只选 Claude / 聚合模型</button>
+      <button class="btn" data-act="model-unsupported" ${busy || !unsupported.length ? 'disabled' : ''}>${icon('filter')}只选不支持的（${unsupported.length}）</button>
       <button class="btn" data-act="model-none" ${busy || !checked.length ? 'disabled' : ''}>${icon('x')}清空</button>
       <span class="repair-sub">已选 ${checked.length} / ${all.filter((m) => m !== option.target).length}</span>
     </div>` : ''}
     <div class="model-list">${boxes || '<span class="repair-sub">没有找到模型记录</span>'}</div>
     <div class="repair-controls">
-      <label>改为模型 <input type="text" data-act="model-target" value="${esc(option.target)}" placeholder="例如 gpt-6.1-sol"></label>
       <span class="repair-sub">将修改会话文件 ${files} 个、索引 ${rows} 条</span>
       <button class="btn primary" data-act="model-apply" ${!repairable || busy || invalid || !checked.length || !option.target ? 'disabled' : ''}>${icon('wrench')}修复模型</button>
     </div>`;
@@ -358,13 +395,15 @@ document.addEventListener('click', async (e) => {
     await call('repair:apply', repairName, source, model, reset);
     return;
   }
-  if (['model-all', 'model-claude', 'model-none'].includes(b.dataset.act) && repairName) {
+  if (['model-all', 'model-unsupported', 'model-none'].includes(b.dataset.act) && repairName) {
     const option = ui.modelOptions[repairName];
     const scan = repairEntry(repairName).scan;
     if (!option || !scan) return;
     const all = [...new Set([...Object.keys(scan.models || {}), ...Object.keys(scan.dbModels || {})])]
       .filter((m) => m !== option.target);
-    const pick = { 'model-all': all, 'model-claude': all.filter((m) => /claude|\//i.test(m)), 'model-none': [] }[b.dataset.act];
+    const supported = supportedSet(scan, option);
+    const bad = all.filter((m) => (supported ? !supported.has(m) : /claude|\//i.test(m)));
+    const pick = { 'model-all': all, 'model-unsupported': bad, 'model-none': [] }[b.dataset.act];
     option.checked = new Set(pick);
     render(true);
     return;
@@ -411,7 +450,13 @@ document.addEventListener('change', async (e) => {
     const option = name && ui.modelOptions[name];
     if (option) {
       if (t.dataset.act === 'model-pick') { t.checked ? option.checked.add(t.value) : option.checked.delete(t.value); }
-      else option.target = t.value.trim();
+      else {
+        const raw = t.value.trim();
+        const cut = t.tagName === 'SELECT' ? raw.indexOf('|') : -1;
+        option.group = cut > 0 ? Number(raw.slice(0, cut)) : -1;
+        option.target = cut > 0 ? raw.slice(cut + 1) : raw;
+        option.checked.delete(option.target);
+      }
       render(true);
     }
     return;

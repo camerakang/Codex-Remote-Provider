@@ -1,7 +1,7 @@
 {
   "name": "codex-remote-provider",
   "productName": "Codex Remote Provider",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Switch SSH remote Codex hosts between official login and relay, and share the local proxy.",
   "author": "45996",
   "private": true,

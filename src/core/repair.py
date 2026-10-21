@@ -115,6 +115,63 @@ def matching_files(root, source):
     return [path for path in session_files(root) if file_provider(path) == source]
 
 
+def top_config(root):
+    """Top-level keys of config.toml (before the first table); enough for provider/model/catalog."""
+    values = {}
+    try:
+        text = (root / "config.toml").read_text(encoding="utf-8")
+    except OSError:
+        return values
+    for line in text.splitlines():
+        if line.lstrip().startswith("["):
+            break
+        match = re.match(r"""^\s*([\w-]+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')""", line)
+        if match:
+            raw = match.group(2)
+            values[match.group(1)] = raw.replace("\\\\", "\\").replace('\\"', '"') if raw is not None else match.group(3)
+    return values
+
+
+def catalog_models(path):
+    try:
+        data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return None
+    items = data.get("models") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return None
+    result = []
+    for item in items:
+        if isinstance(item, dict) and isinstance(item.get("slug"), str):
+            entry = {"slug": item["slug"], "name": item.get("display_name") or item["slug"]}
+            if item.get("visibility", "list") != "list":
+                entry["hidden"] = True
+            result.append(entry)
+    return result
+
+
+def available_models(root):
+    """Models the currently configured login method offers, read the same way Codex does."""
+    conf = top_config(root)
+    provider = conf.get("model_provider") or "openai"
+    groups = []
+    catalog = conf.get("model_catalog_json")
+    if catalog:
+        path = pathlib.Path(catalog)
+        if not path.is_absolute():
+            path = root / path
+        models = catalog_models(path)
+        if models:
+            groups.append({"label": f"当前方式（{provider}）", "current": True, "models": models})
+    official = catalog_models(root / "models_cache.json")
+    if official:
+        if provider == "openai" and not groups:
+            groups.append({"label": "当前方式（官方登录）", "current": True, "models": official})
+        elif provider != "openai":
+            groups.append({"label": "官方登录（ChatGPT）", "current": False, "models": official})
+    return {"provider": provider, "model": conf.get("model"), "groups": groups}
+
+
 def local_codex_running():
     if os.name == "nt":
         out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True, text=True,
@@ -347,6 +404,7 @@ def main():
     options = json.loads(base64.b64decode(sys.argv[2]).decode("utf-8")) if len(sys.argv) > 2 else {}
     if mode == "scan":
         result = snapshot(root)
+        result["available"] = available_models(root)
     elif mode == "repair":
         result = repair(root, options)
     elif mode == "repair-model":
