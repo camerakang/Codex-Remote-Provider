@@ -7,7 +7,7 @@
 - 将指定远程主机切换到官方 ChatGPT 登录、Codex++ 中转站，或与本机相同的供应商。
 - 让远程主机使用本机代理（例如 Clash Verge）：局域网模式在远端 `~/.bashrc`／`~/.zshrc` 写入受管理的配置；SSH 隧道模式在软件运行期间保持 `ssh -R` 连接。
 - 修改远端配置前会创建带时间戳的备份（`*.bak-<时间戳>`），修改后重启远端 `codex app-server`。
-- 在“修复旧对话”页面扫描远端会话索引与 JSONL 文件，将指定旧供应商改为远端当前供应商；可同时重置索引模型。修复前自动备份到远端 `~/.codex/provider-sync/repair-backups/`。
+- 在“修复旧对话”页面扫描远端会话索引与 JSONL 文件，将指定旧供应商改为远端当前供应商；可同时重置索引模型；也可把旧对话锁定的不可用模型（例如切到官方登录后的 Codex++ 聚合模型）改成目标模型。支持本机和远端，修复本机前需完全退出 Codex。修复前自动备份到 `~/.codex/provider-sync/repair-backups/`。
 
 软件从 `~/.codex/.codex-global-state.json` 读取主机列表，从 `~/.codex/backups/codex-plus-live-*` 读取中转站配置。软件设置和日志保存在 `~/.codex/provider-sync/`。
 

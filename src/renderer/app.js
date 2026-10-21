@@ -14,7 +14,7 @@ const TITLES = { hosts: '远端主机', repair: '修复旧对话', proxy: '本�
 
 const ui = {
   page: 'hosts', snap: null, logs: [],
-  target: 'official', relayId: null, selected: null, pending: false, repairOptions: {},
+  target: 'official', relayId: null, selected: null, pending: false, repairOptions: {}, modelOptions: {},
 };
 
 function toast(msg, kind = 'error') {
@@ -124,50 +124,96 @@ function renderHosts() {
 }
 
 /* ---------- conversation repair page ---------- */
-function renderRepair() {
-  const hosts = ui.snap.hosts;
-  if (!hosts.length) return '<div class="empty">Codex 中没有 SSH 远程连接</div>';
-  const intro = `<div class="band">
-    <h2>${icon('history')}修复供应商切换后的旧对话</h2>
-    <div class="repair-note">先扫描远端索引和会话文件，再选择旧供应商。修复会把选中的旧记录改为该主机当前供应商，并可重置索引中的旧模型。历史消息与历史回合记录不会改写。</div>
-    <div class="repair-note">修复时会停止远端 app-server，相关聊天会暂时断开；重新连接时 Codex 会启动服务。修改前会在远端 <code>~/.codex/provider-sync/repair-backups/</code> 保存数据库和命中的会话文件。</div>
+const LOCAL = '__local__';
+const sum = (o) => Object.values(o || {}).reduce((x, y) => x + y, 0);
+
+function providerSection(name, scan, repairable, busy) {
+  const counts = [...new Set([...Object.keys(scan.database), ...Object.keys(scan.files)])]
+    .filter((p) => p !== scan.targetProvider).sort();
+  let option = ui.repairOptions[name];
+  if (!option || option.targetProvider !== scan.targetProvider || !counts.includes(option.source)) {
+    option = { targetProvider: scan.targetProvider, source: counts.includes('custom') ? 'custom' : counts[0],
+      resetModel: true, model: scan.targetModel || '' };
+    ui.repairOptions[name] = option;
+  }
+  const source = option.source;
+  const dbCount = source ? scan.database[source] || 0 : 0;
+  const fileCount = source ? scan.files[source] || 0 : 0;
+  const invalid = scan.invalidFiles.length;
+  const opts = counts.map((p) => `<option value="${esc(p)}" ${p === source ? 'selected' : ''}>${esc(p)} · 索引 ${scan.database[p] || 0} / 文件 ${scan.files[p] || 0}</option>`).join('');
+  return `<div class="repair-step">供应商不一致</div>
+    <div class="repair-controls">
+      <label>旧供应商 <select data-act="repair-source" ${counts.length ? '' : 'disabled'}>${opts || '<option>无不匹配记录</option>'}</select></label>
+      <label class="switch"><input type="checkbox" data-act="repair-reset" ${option.resetModel ? 'checked' : ''}><span class="track"></span>重置索引模型</label>
+      <input type="text" data-act="repair-model" value="${esc(option.model)}" placeholder="留空清除旧索引模型" ${option.resetModel ? '' : 'disabled'}>
+    </div>
+    <div class="repair-controls">
+      <span class="repair-sub">将改为 ${esc(scan.targetProvider)}：索引 ${dbCount} 条、文件 ${fileCount} 个${invalid ? '；存在无法解析的文件，修复已禁用' : ''}</span>
+      <button class="btn" data-act="repair-apply" ${!repairable || busy || invalid || !source || dbCount + fileCount === 0 ? 'disabled' : ''}>${icon('wrench')}修复供应商</button>
+    </div>`;
+}
+
+function modelSection(name, scan, repairable, busy) {
+  const all = [...new Set([...Object.keys(scan.models || {}), ...Object.keys(scan.dbModels || {})])].sort();
+  let option = ui.modelOptions[name];
+  if (!option || option.scanned !== scan) {
+    const keep = option ? option.checked : new Set();
+    option = { scanned: scan, checked: new Set([...keep].filter((m) => all.includes(m))),
+      target: option && option.target ? option.target : (scan.targetModel || '') };
+    ui.modelOptions[name] = option;
+  }
+  const checked = [...option.checked].filter((m) => m !== option.target);
+  const files = checked.reduce((n, m) => n + ((scan.models || {})[m] || 0), 0);
+  const rows = checked.reduce((n, m) => n + ((scan.dbModels || {})[m] || 0), 0);
+  const invalid = scan.invalidFiles.length;
+  const boxes = all.map((m) => `<label class="model-chip ${m === option.target ? 'is-target' : ''}">
+      <input type="checkbox" data-act="model-pick" value="${esc(m)}" ${option.checked.has(m) && m !== option.target ? 'checked' : ''} ${m === option.target ? 'disabled' : ''}>
+      ${esc(m)} <span class="repair-sub">文件 ${(scan.models || {})[m] || 0} / 索引 ${(scan.dbModels || {})[m] || 0}</span></label>`).join('');
+  return `<div class="repair-step">旧对话锁定的模型</div>
+    <div class="repair-note">旧对话会记住上一轮用的模型。切到另一个登录方式后，Codex 继续对话前会先用这个旧模型压缩上下文，新账号不支持它就会报 “model is not supported”。勾选新登录方式下不可用的模型，统一改成下面的目标模型。</div>
+    <div class="model-list">${boxes || '<span class="repair-sub">没有找到模型记录</span>'}</div>
+    <div class="repair-controls">
+      <label>改为模型 <input type="text" data-act="model-target" value="${esc(option.target)}" placeholder="例如 gpt-6.1-sol"></label>
+      <span class="repair-sub">将修改会话文件 ${files} 个、索引 ${rows} 条</span>
+      <button class="btn primary" data-act="model-apply" ${!repairable || busy || invalid || !checked.length || !option.target ? 'disabled' : ''}>${icon('wrench')}修复模型</button>
+    </div>`;
+}
+
+function repairCard({ name, title, sub, repairable, scan, busy, ico }) {
+  return `<div class="band repair-host" data-host="${esc(name)}">
+    <h2>${icon(ico)}${esc(title)} <span class="repair-sub">${esc(sub)}</span></h2>
+    <div class="repair-controls">
+      <button class="btn" data-act="repair-scan" ${!repairable || busy ? 'disabled' : ''}>${icon('scan-search')}扫描旧对话</button>
+      ${busy ? `<span class="busy">${icon('loader-circle', 'spin')}${esc(busy)}...</span>` : ''}
+      ${scan ? `<span class="repair-sub">索引 ${sum(scan.database)} 条；文件 ${sum(scan.files)} 个${scan.invalidFiles.length ? `；无法解析 ${scan.invalidFiles.length} 个` : ''}</span>` : '<span class="repair-sub">尚未扫描</span>'}
+    </div>
+    ${scan ? modelSection(name, scan, repairable, busy) + providerSection(name, scan, repairable, busy) : ''}
   </div>`;
-  return intro + hosts.map((h) => {
-    const st = h.status, scan = h.repairScan;
+}
+
+function repairEntry(name) {
+  if (name === LOCAL) return { ...ui.snap.localRepair, local: true };
+  return ui.snap.hosts.find((h) => h.name === name).repairScan ? { scan: ui.snap.hosts.find((h) => h.name === name).repairScan } : {};
+}
+
+function renderRepair() {
+  const lr = ui.snap.localRepair || {};
+  const intro = `<div class="band">
+    <h2>${icon('history')}修复切换登录方式后的旧对话</h2>
+    <div class="repair-note">先扫描，再按需修复。修改前自动备份数据库和命中的会话文件到 <code>~/.codex/provider-sync/repair-backups/</code>；对话内容不变，只改记录里的供应商或模型名。</div>
+    <div class="repair-note">修复本机前要完全退出 Codex 桌面版（含托盘）；修复远端时会停止远端 app-server，重新连接时 Codex 会自动启动。</div>
+  </div>`;
+  const local = repairCard({ name: LOCAL, title: '本机', ico: 'monitor',
+    sub: lr.scan ? `当前 ${lr.scan.targetProvider}${lr.scan.targetModel ? ' / ' + lr.scan.targetModel : ''}` : '本机 ~/.codex',
+    repairable: true, scan: lr.scan, busy: lr.busy });
+  const remotes = ui.snap.hosts.map((h) => {
+    const st = h.status;
     const online = st && st.online;
     const repairable = online && (st.kind === 'official' || st.kind === 'relay');
-    const counts = scan ? [...new Set([...Object.keys(scan.database), ...Object.keys(scan.files)])]
-      .filter((p) => p !== scan.targetProvider).sort() : [];
-    let option = ui.repairOptions[h.name];
-    if (scan && (!option || option.targetProvider !== scan.targetProvider || !counts.includes(option.source))) {
-      option = { targetProvider: scan.targetProvider, source: counts.includes('custom') ? 'custom' : counts[0],
-        resetModel: true, model: scan.targetModel || '' };
-      ui.repairOptions[h.name] = option;
-    }
-    const source = option && option.source;
-    const dbCount = scan && source ? scan.database[source] || 0 : 0;
-    const fileCount = scan && source ? scan.files[source] || 0 : 0;
-    const invalid = scan ? scan.invalidFiles.length : 0;
-    const opts = counts.map((p) => `<option value="${esc(p)}" ${p === source ? 'selected' : ''}>${esc(p)} · 索引 ${scan.database[p] || 0} / 文件 ${scan.files[p] || 0}</option>`).join('');
-    const busy = !!h.busy;
-    return `<div class="band repair-host" data-host="${esc(h.name)}">
-      <h2>${icon('server')}${esc(h.name)} <span class="repair-sub">${repairable ? '当前供应商 ' + esc(scan ? scan.targetProvider : st.provider || 'openai') : online ? '供应商配置不可识别' : '离线'}</span></h2>
-      <div class="repair-controls">
-        <button class="btn" data-act="repair-scan" ${!repairable || busy ? 'disabled' : ''}>${icon('scan-search')}扫描旧对话</button>
-        ${busy ? `<span class="busy">${icon('loader-circle', 'spin')}${esc(h.busy)}...</span>` : ''}
-        ${scan ? `<span class="repair-sub">索引 ${Object.values(scan.database).reduce((a,b) => a+b,0)} 条；文件 ${Object.values(scan.files).reduce((a,b) => a+b,0)} 个${invalid ? `；无法解析 ${invalid} 个` : ''}</span>` : '<span class="repair-sub">尚未扫描</span>'}
-      </div>
-      ${scan ? `<div class="repair-controls">
-        <label>旧供应商 <select data-act="repair-source" ${counts.length ? '' : 'disabled'}>${opts || '<option>无不匹配记录</option>'}</select></label>
-        <label class="switch"><input type="checkbox" data-act="repair-reset" ${option.resetModel ? 'checked' : ''}><span class="track"></span>重置索引模型</label>
-        <input type="text" data-act="repair-model" value="${esc(option.model)}" placeholder="留空清除旧索引模型" ${option.resetModel ? '' : 'disabled'}>
-      </div>
-      <div class="repair-controls">
-        <span class="repair-sub">本次将修改索引 ${dbCount} 条、文件 ${fileCount} 个${invalid ? '；存在无法解析的文件，修复已禁用' : ''}</span>
-        <button class="btn primary" data-act="repair-apply" ${!repairable || busy || invalid || !source || dbCount + fileCount === 0 ? 'disabled' : ''}>${icon('wrench')}修复此主机</button>
-      </div>` : ''}
-    </div>`;
+    const sub = repairable ? '当前供应商 ' + (h.repairScan ? h.repairScan.targetProvider : st.provider || 'openai') : online ? '供应商配置不可识别' : '离线';
+    return repairCard({ name: h.name, title: h.name, ico: 'server', sub, repairable, scan: h.repairScan, busy: h.busy });
   }).join('');
+  return intro + local + remotes;
 }
 
 /* ---------- proxy page ---------- */
@@ -297,10 +343,22 @@ document.addEventListener('click', async (e) => {
     const source = row.querySelector('[data-act=repair-source]').value;
     const model = row.querySelector('[data-act=repair-model]').value.trim();
     const reset = row.querySelector('[data-act=repair-reset]').checked;
-    const scan = ui.snap.hosts.find((h) => h.name === repairName).repairScan;
-    if (!window.confirm(`修复 ${repairName} 的旧对话？\n\n将 ${source} 改为当前供应商 ${scan.targetProvider}；索引 ${scan.database[source] || 0} 条、会话文件 ${scan.files[source] || 0} 个。远端 app-server 会停止，重新连接时启动。修复前自动备份。`)) return;
+    const scan = repairEntry(repairName).scan;
+    const label = repairName === LOCAL ? '本机' : repairName;
+    if (!window.confirm(`修复 ${label} 的旧对话供应商？\n\n将 ${source} 改为当前供应商 ${scan.targetProvider}；索引 ${scan.database[source] || 0} 条、会话文件 ${scan.files[source] || 0} 个。修复前自动备份。`)) return;
     b.disabled = true;
     await call('repair:apply', repairName, source, model, reset);
+    return;
+  }
+  if (b.dataset.act === 'model-apply' && repairName) {
+    const option = ui.modelOptions[repairName];
+    const target = option.target;
+    const sources = [...option.checked].filter((m) => m !== target);
+    const label = repairName === LOCAL ? '本机' : repairName;
+    const tip = repairName === LOCAL ? '请确认 Codex 桌面版已完全退出。' : '远端 app-server 会停止，重新连接时启动。';
+    if (!window.confirm(`修复 ${label} 旧对话的模型？\n\n${sources.join('\n')}\n→ ${target}\n\n${tip}修复前自动备份。`)) return;
+    b.disabled = true;
+    await call('repair:model', repairName, sources, target);
     return;
   }
   if (b.id === 'proxyDetect') {
@@ -329,6 +387,16 @@ document.addEventListener('click', async (e) => {
 
 document.addEventListener('change', async (e) => {
   const t = e.target;
+  if (t.dataset.act === 'model-pick' || t.dataset.act === 'model-target') {
+    const name = hostOf(t);
+    const option = name && ui.modelOptions[name];
+    if (option) {
+      if (t.dataset.act === 'model-pick') { t.checked ? option.checked.add(t.value) : option.checked.delete(t.value); }
+      else option.target = t.value.trim();
+      render(true);
+    }
+    return;
+  }
   if (['repair-source', 'repair-reset', 'repair-model'].includes(t.dataset.act)) {
     const name = hostOf(t);
     if (name && ui.repairOptions[name]) {

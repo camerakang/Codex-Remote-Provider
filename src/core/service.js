@@ -44,6 +44,7 @@ class Service extends EventEmitter {
 
   hosts() { return cfg.discoverHosts(); }
   host(name) {
+    if (name === repair.LOCAL) return { name, local: true };
     const h = this.hosts().find((x) => x.name === name);
     if (!h) throw new Error(`未知主机 ${name}`);
     return h;
@@ -61,6 +62,11 @@ class Service extends EventEmitter {
       relays: relays.map(cfg.publicProfile),
       localProxy: this.localProxy,
       settings: { ...s },
+      localRepair: {
+        scan: this.repairScans[repair.LOCAL] || null,
+        busy: this.busy[repair.LOCAL] || null,
+        result: this.lastResult[repair.LOCAL] || null,
+      },
       hosts: this.hosts().map((h) => ({
         name: h.name, target: h.target, port: h.port,
         excluded: (s.excluded || []).includes(h.name),
@@ -151,6 +157,8 @@ class Service extends EventEmitter {
 
   async test(name) { return this.withBusy(name, '实测', () => this.runTest(name)); }
 
+  label(name) { return name === repair.LOCAL ? '本机' : name; }
+
   async scanConversations(name) {
     return this.withBusy(name, '扫描会话', async () => {
       try {
@@ -160,12 +168,13 @@ class Service extends EventEmitter {
         const outdated = Object.entries(result.database)
           .filter(([provider]) => provider !== result.targetProvider)
           .reduce((sum, [, count]) => sum + count, 0);
-        this.log(`[${name}] 会话扫描完成：索引中 ${outdated} 条供应商不匹配，无法解析的文件 ${result.invalidFiles.length} 个`);
+        const models = Object.keys(result.models || {}).filter((m) => m !== result.targetModel).length;
+        this.log(`[${this.label(name)}] 会话扫描完成：索引中 ${outdated} 条供应商不匹配，会话里出现 ${models} 个其他模型，无法解析的文件 ${result.invalidFiles.length} 个`);
         return result;
       } catch (e) {
         delete this.repairScans[name];
         this.changed();
-        this.log(`[${name}] 会话扫描失败: ${e.message}`, 'error');
+        this.log(`[${this.label(name)}] 会话扫描失败: ${e.message}`, 'error');
         throw e;
       }
     });
@@ -175,13 +184,30 @@ class Service extends EventEmitter {
     return this.withBusy(name, '修复会话', async () => {
       try {
         const result = await repair.apply(this.host(name), this.repairScans[name], source, model, resetModel);
-        this.log(`[${name}] 已修复索引 ${result.database} 条、会话文件 ${result.files} 个；备份: ${result.backup || '无需修改'}`, 'ok');
+        this.log(`[${this.label(name)}] 已修复索引 ${result.database} 条、会话文件 ${result.files} 个；备份: ${result.backup || '无需修改'}`, 'ok');
         this.setResult(name, true, `会话已修复 ${result.database} 条索引 / ${result.files} 个文件`);
         this.repairScans[name] = await repair.scan(this.host(name));
         this.changed();
         return result;
       } catch (e) {
-        this.log(`[${name}] 会话修复失败: ${e.message}`, 'error');
+        this.log(`[${this.label(name)}] 会话修复失败: ${e.message}`, 'error');
+        this.setResult(name, false, e.message);
+        throw e;
+      }
+    });
+  }
+
+  async repairModels(name, sourceModels, targetModel) {
+    return this.withBusy(name, '修复模型', async () => {
+      try {
+        const result = await repair.applyModel(this.host(name), this.repairScans[name], sourceModels, targetModel);
+        this.log(`[${this.label(name)}] 已把 ${sourceModels.join('、')} 改为 ${targetModel}：会话文件 ${result.files} 个（${result.lines} 处）、索引 ${result.database} 条；备份: ${result.backup || '无需修改'}`, 'ok');
+        this.setResult(name, true, `模型已修复 ${result.files} 个文件 / ${result.database} 条索引`);
+        this.repairScans[name] = await repair.scan(this.host(name));
+        this.changed();
+        return result;
+      } catch (e) {
+        this.log(`[${this.label(name)}] 模型修复失败: ${e.message}`, 'error');
         this.setResult(name, false, e.message);
         throw e;
       }

@@ -91,6 +91,7 @@ handle('switch', (names, kind, relayId, opts) => svc.switchHosts(names, kind, re
 handle('test', (name) => svc.test(name));
 handle('repair:scan', (name) => svc.scanConversations(name));
 handle('repair:apply', (name, source, model, resetModel) => svc.repairConversations(name, source, model, resetModel));
+handle('repair:model', (name, sourceModels, targetModel) => svc.repairModels(name, sourceModels, targetModel));
 handle('proxy:detect', () => svc.detectProxy());
 handle('proxy:set', (name, mode, rport) => svc.setProxyMode(name, mode, rport));
 handle('proxy:test', (name) => svc.proxyTest(name));
@@ -138,6 +139,7 @@ async function captureAll(dir) {
   for (const page of ['hosts', 'repair', 'proxy', 'logs', 'settings']) {
     await win.webContents.executeJavaScript(`document.querySelector('.nav[data-page=${page}]').click()`);
     if (page === 'repair') {
+      await svc.scanConversations('__local__').catch(() => {});
       const host = svc.activeHosts().find((h) => h.name === 'forlinx');
       if (host) await svc.scanConversations(host.name).catch(() => {});
     }

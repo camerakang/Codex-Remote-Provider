@@ -96,6 +96,37 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(repair.snapshot(self.root)["database"]["custom"], 1)
         self.assertEqual(repair.snapshot(self.root)["files"]["custom"], 2)
 
+    @patch.object(repair, "stop_app_server")
+    def test_model_repair_rewrites_pinned_model_only(self, _stop):
+        old = "cpx-relay-mu3su9ba/claude-opus-5-5"
+        meta = {"type": "session_meta", "payload": {"id": "pinned", "model_provider": "custom"}}
+        ctx = {"type": "turn_context", "payload": {"model": old, "comp_hash": "codex-plus-aggregate", "effort": "medium"}}
+        settings = {"type": "event_msg", "payload": {"type": "thread_settings_applied",
+                                                       "thread_settings": {"model": old, "model_provider_id": "openai"}}}
+        message = '{"type":"response_item","payload":{"text":"讨论 ' + old + ' 的问题"}}\n'
+        pinned = self.root / "sessions" / "pinned.jsonl"
+        pinned.write_text("\n".join(json.dumps(x, ensure_ascii=False) for x in (meta, ctx, settings)) + "\n" + message,
+                          encoding="utf-8")
+        db = sqlite3.connect(self.root / "state_5.sqlite")
+        db.execute("INSERT INTO threads VALUES ('pinned', 'custom', ?)", (old,))
+        db.commit()
+        db.close()
+
+        scan = repair.snapshot(self.root)
+        self.assertEqual((scan["models"][old], scan["dbModels"][old]), (1, 1))
+        result = repair.repair_model(self.root, {"sourceModels": [old], "targetModel": "gpt-6.1-sol",
+                                                 "expected": {old: {"database": 1, "files": 1}}})
+        self.assertEqual((result["files"], result["lines"], result["database"]), (1, 2, 1))
+        lines = pinned.read_text(encoding="utf-8").splitlines(keepends=True)
+        self.assertEqual(json.loads(lines[1])["payload"], {"model": "gpt-6.1-sol", "effort": "medium"})
+        self.assertEqual(json.loads(lines[2])["payload"]["thread_settings"]["model"], "gpt-6.1-sol")
+        self.assertEqual(lines[3], message)
+        self.assertEqual(self.file.read_text(encoding="utf-8").splitlines(keepends=True)[1], self.history)
+        db = sqlite3.connect(self.root / "state_5.sqlite")
+        self.assertEqual(db.execute("SELECT model FROM threads WHERE id='pinned'").fetchone(), ("gpt-6.1-sol",))
+        db.close()
+        self.assertIn(old, (pathlib.Path(result["backup"]) / "sessions" / "pinned.jsonl").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
