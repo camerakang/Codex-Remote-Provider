@@ -1,0 +1,54 @@
+{
+  "name": "codex-remote-provider",
+  "productName": "Codex Remote Provider",
+  "version": "1.0.0",
+  "description": "Switch SSH remote Codex hosts between official login and relay, and share the local proxy.",
+  "author": "45996",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "cli": "node scripts/cli.js",
+    "icon": "node scripts/make-icon.js",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
+  },
+  "dependencies": {
+    "lucide": "^1.61.0"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "local.codex.remote-provider",
+    "productName": "Codex Remote Provider",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["src/**/*", "build/icon.png", "node_modules/lucide/dist/umd/lucide.min.js", "package.json"],
+    "win": {
+      "target": ["nsis", "portable"],
+      "icon": "build/icon.png"
+    },
+    "portable": {
+      "artifactName": "CodexRemoteProvider-${version}-win-portable.${ext}"
+    },
+    "nsis": {
+      "artifactName": "CodexRemoteProvider-${version}-win-setup.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Codex Remote Provider"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png",
+      "identity": "-",
+      "artifactName": "CodexRemoteProvider-${version}-mac-${arch}.${ext}"
+    }
+  }
+}
