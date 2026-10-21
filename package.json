@@ -10,8 +10,8 @@
     "start": "electron .",
     "cli": "node scripts/cli.js",
     "icon": "node scripts/make-icon.js",
-    "dist:win": "electron-builder --win",
-    "dist:mac": "electron-builder --mac"
+    "dist:win": "electron-builder --win --publish never",
+    "dist:mac": "electron-builder --mac --publish never"
   },
   "dependencies": {
     "lucide": "^1.61.0"
