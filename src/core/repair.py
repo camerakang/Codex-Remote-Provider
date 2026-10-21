@@ -92,16 +92,22 @@ def snapshot(root):
         con.close()
     files = {}
     models = {}
+    model_sets = {}
     errors = []
     for path in session_files(root):
         try:
             provider = file_provider(path)
             files[str(provider)] = files.get(str(provider), 0) + 1
-            for model in file_models(path):
+            found = file_models(path)
+            for model in found:
                 models[model] = models.get(model, 0) + 1
+            if found:
+                key = "\n".join(sorted(found))
+                model_sets[key] = model_sets.get(key, 0) + 1
         except (OSError, ValueError, UnicodeError):
             errors.append(str(path.relative_to(root)))
     return {"database": db_counts, "files": files, "dbModels": db_models, "models": models,
+            "modelSets": [[key.split("\n"), count] for key, count in sorted(model_sets.items())],
             "invalidFiles": errors}
 
 

@@ -142,6 +142,8 @@ async function captureAll(dir) {
       await svc.scanConversations('__local__').catch(() => {});
       const host = svc.activeHosts().find((h) => h.name === 'forlinx');
       if (host) await svc.scanConversations(host.name).catch(() => {});
+      await wait(500);
+      await win.webContents.executeJavaScript(`(document.querySelector('[data-act=${process.env.CRP_CAPTURE_PICK || 'model-claude'}]') || {click() {}}).click()`);
     }
     await wait(700);
     const img = await win.webContents.capturePage();

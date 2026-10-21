@@ -163,7 +163,9 @@ function modelSection(name, scan, repairable, busy) {
     ui.modelOptions[name] = option;
   }
   const checked = [...option.checked].filter((m) => m !== option.target);
-  const files = checked.reduce((n, m) => n + ((scan.models || {})[m] || 0), 0);
+  const files = scan.modelSets
+    ? scan.modelSets.filter(([ms]) => ms.some((m) => checked.includes(m))).reduce((n, [, c]) => n + c, 0)
+    : checked.reduce((n, m) => n + ((scan.models || {})[m] || 0), 0);
   const rows = checked.reduce((n, m) => n + ((scan.dbModels || {})[m] || 0), 0);
   const invalid = scan.invalidFiles.length;
   const boxes = all.map((m) => `<label class="model-chip ${m === option.target ? 'is-target' : ''}">
@@ -171,6 +173,12 @@ function modelSection(name, scan, repairable, busy) {
       ${esc(m)} <span class="repair-sub">文件 ${(scan.models || {})[m] || 0} / 索引 ${(scan.dbModels || {})[m] || 0}</span></label>`).join('');
   return `<div class="repair-step">旧对话锁定的模型</div>
     <div class="repair-note">旧对话会记住上一轮用的模型。切到另一个登录方式后，Codex 继续对话前会先用这个旧模型压缩上下文，新账号不支持它就会报 “model is not supported”。勾选新登录方式下不可用的模型，统一改成下面的目标模型。</div>
+    ${all.length ? `<div class="repair-controls">
+      <button class="btn" data-act="model-all" ${busy ? 'disabled' : ''}>${icon('check-check')}全选</button>
+      <button class="btn" data-act="model-claude" ${busy ? 'disabled' : ''}>${icon('filter')}只选 Claude / 聚合模型</button>
+      <button class="btn" data-act="model-none" ${busy || !checked.length ? 'disabled' : ''}>${icon('x')}清空</button>
+      <span class="repair-sub">已选 ${checked.length} / ${all.filter((m) => m !== option.target).length}</span>
+    </div>` : ''}
     <div class="model-list">${boxes || '<span class="repair-sub">没有找到模型记录</span>'}</div>
     <div class="repair-controls">
       <label>改为模型 <input type="text" data-act="model-target" value="${esc(option.target)}" placeholder="例如 gpt-6.1-sol"></label>
@@ -348,6 +356,17 @@ document.addEventListener('click', async (e) => {
     if (!window.confirm(`修复 ${label} 的旧对话供应商？\n\n将 ${source} 改为当前供应商 ${scan.targetProvider}；索引 ${scan.database[source] || 0} 条、会话文件 ${scan.files[source] || 0} 个。修复前自动备份。`)) return;
     b.disabled = true;
     await call('repair:apply', repairName, source, model, reset);
+    return;
+  }
+  if (['model-all', 'model-claude', 'model-none'].includes(b.dataset.act) && repairName) {
+    const option = ui.modelOptions[repairName];
+    const scan = repairEntry(repairName).scan;
+    if (!option || !scan) return;
+    const all = [...new Set([...Object.keys(scan.models || {}), ...Object.keys(scan.dbModels || {})])]
+      .filter((m) => m !== option.target);
+    const pick = { 'model-all': all, 'model-claude': all.filter((m) => /claude|\//i.test(m)), 'model-none': [] }[b.dataset.act];
+    option.checked = new Set(pick);
+    render(true);
     return;
   }
   if (b.dataset.act === 'model-apply' && repairName) {
