@@ -77,6 +77,51 @@ def file_models(path):
     return {model for _, model in model_lines(path) if model}
 
 
+# OpenAI's own encrypted reasoning is a Fernet token; relays for other vendors (Claude etc.)
+# store their own blobs, which the official backend rejects with "could not be verified".
+REMOVED_REASONING = "crp_removed_reasoning"
+
+
+def reasoning_kind(item):
+    if not isinstance(item, dict) or item.get("type") != "reasoning":
+        return None
+    content = item.get("encrypted_content")
+    if not isinstance(content, str) or not content:
+        return None
+    return "openai" if content.startswith("gAAAAA") else "foreign"
+
+
+def reasoning_matches(item, scope):
+    kind = reasoning_kind(item)
+    return kind is not None and (scope == "all" or kind == scope)
+
+
+def line_reasoning(obj):
+    """Encrypted reasoning items carried by a rollout line (direct item or inside compacted history)."""
+    payload = obj.get("payload") if isinstance(obj, dict) else None
+    if not isinstance(payload, dict):
+        return []
+    if obj.get("type") == "response_item":
+        return [payload] if reasoning_kind(payload) else []
+    if obj.get("type") == "compacted" and isinstance(payload.get("replacement_history"), list):
+        return [item for item in payload["replacement_history"] if reasoning_kind(item)]
+    return []
+
+
+def file_reasoning(path):
+    counts = {"openai": 0, "foreign": 0}
+    with path.open("r", encoding="utf-8", newline="") as stream:
+        for line in stream:
+            if '"reasoning"' in line and '"encrypted_content"' in line:
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                for item in line_reasoning(obj):
+                    counts[reasoning_kind(item)] += 1
+    return counts
+
+
 def snapshot(root):
     path = db_path(root)
     con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
@@ -93,6 +138,7 @@ def snapshot(root):
     files = {}
     models = {}
     model_sets = {}
+    reasoning = {scope: {"files": 0, "items": 0} for scope in ("foreign", "all")}
     errors = []
     for path in session_files(root):
         try:
@@ -104,11 +150,16 @@ def snapshot(root):
             if found:
                 key = "\n".join(sorted(found))
                 model_sets[key] = model_sets.get(key, 0) + 1
+            kinds = file_reasoning(path)
+            for scope, count in (("foreign", kinds["foreign"]), ("all", kinds["foreign"] + kinds["openai"])):
+                if count:
+                    reasoning[scope]["files"] += 1
+                    reasoning[scope]["items"] += count
         except (OSError, ValueError, UnicodeError):
             errors.append(str(path.relative_to(root)))
     return {"database": db_counts, "files": files, "dbModels": db_models, "models": models,
             "modelSets": [[key.split("\n"), count] for key, count in sorted(model_sets.items())],
-            "invalidFiles": errors}
+            "reasoning": reasoning, "invalidFiles": errors}
 
 
 def matching_files(root, source):
@@ -398,6 +449,89 @@ def repair_model(root, options):
         con.close()
 
 
+def rewrite_reasoning(path, scope):
+    """Neutralise matching reasoning items; the line itself (and its ordinal) is kept so paginated history stays contiguous."""
+    mode = stat.S_IMODE(path.stat().st_mode)
+    temp_name = None
+    removed = 0
+    try:
+        with path.open("r", encoding="utf-8", newline="") as original:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", newline="", dir=path.parent,
+                                             prefix=".crp-repair-", suffix=".tmp", delete=False) as changed:
+                temp_name = changed.name
+                for line in original:
+                    if '"reasoning"' in line and '"encrypted_content"' in line:
+                        obj = json.loads(line)
+                        payload = obj.get("payload")
+                        hit = 0
+                        if obj.get("type") == "response_item" and reasoning_matches(payload, scope):
+                            # Unknown item types load as ResponseItem::Other, which is never sent to the model.
+                            obj["payload"] = {"type": REMOVED_REASONING}
+                            hit = 1
+                        elif obj.get("type") == "compacted" and isinstance(payload.get("replacement_history"), list):
+                            kept = [item for item in payload["replacement_history"] if not reasoning_matches(item, scope)]
+                            hit = len(payload["replacement_history"]) - len(kept)
+                            payload["replacement_history"] = kept
+                        if hit:
+                            ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+                            line = json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + ending
+                            removed += hit
+                    changed.write(line)
+                changed.flush()
+                os.fsync(changed.fileno())
+        if not removed:
+            raise RuntimeError("会话文件在扫描后发生变化")
+        os.chmod(temp_name, mode)
+        os.replace(temp_name, path)
+        return removed
+    finally:
+        if temp_name and os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def repair_reasoning(root, options):
+    scope = options.get("scope")
+    expected = options.get("expected")
+    if scope not in ("foreign", "all"):
+        raise ValueError("清理范围不正确")
+    if not isinstance(expected, dict) or not isinstance(expected.get("files"), int) or not isinstance(expected.get("items"), int):
+        raise ValueError("缺少扫描结果")
+
+    def check(snap):
+        if snap["invalidFiles"]:
+            raise RuntimeError("发现无法解析的会话文件，已停止以避免遗漏")
+        if snap["reasoning"][scope] != expected:
+            raise RuntimeError("会话内容已变化，请重新扫描")
+
+    check(snapshot(root))
+    if expected["files"] == 0:
+        return {"files": 0, "items": 0, "backup": None}
+    stop_app_server()
+    check(snapshot(root))
+    files = []
+    for path in session_files(root):
+        kinds = file_reasoning(path)
+        if kinds["foreign"] or (scope == "all" and kinds["openai"]):
+            files.append(path)
+    con = sqlite3.connect(db_path(root), timeout=10)
+    changed = []
+    items = 0
+    try:
+        backup = make_backup(root, con, files, {"kind": "reasoning", "scope": scope, "items": expected["items"]})
+        for file in files:
+            items += rewrite_reasoning(file, scope)
+            changed.append(file)
+        if items != expected["items"]:
+            raise RuntimeError("清理数量与扫描结果不一致")
+        return {"files": len(changed), "items": items, "backup": str(backup)}
+    except Exception:
+        for file in changed:
+            shutil.copy2(backup / file.relative_to(root), file)
+        raise
+    finally:
+        con.close()
+
+
 def main():
     root = root_dir()
     mode = sys.argv[1] if len(sys.argv) > 1 else "scan"
@@ -409,6 +543,8 @@ def main():
         result = repair(root, options)
     elif mode == "repair-model":
         result = repair_model(root, options)
+    elif mode == "repair-reasoning":
+        result = repair_reasoning(root, options)
     else:
         raise ValueError("未知命令")
     print("@CRP_REPAIR_JSON=" + json.dumps(result, ensure_ascii=False, separators=(",", ":")))

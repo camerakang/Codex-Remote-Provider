@@ -14,7 +14,7 @@ const TITLES = { hosts: '远端主机', repair: '修复旧对话', proxy: '本�
 
 const ui = {
   page: 'hosts', snap: null, logs: [],
-  target: 'official', relayId: null, selected: null, pending: false, repairOptions: {}, modelOptions: {},
+  target: 'official', relayId: null, selected: null, pending: false, repairOptions: {}, modelOptions: {}, reasoningScope: {},
 };
 
 function toast(msg, kind = 'error') {
@@ -224,6 +224,22 @@ function modelSection(name, scan, repairable, busy) {
     </div>`;
 }
 
+function reasoningSection(name, scan, repairable, busy) {
+  const r = scan.reasoning;
+  if (!r) return '';
+  const scope = ui.reasoningScope[name] || 'foreign';
+  const cur = r[scope];
+  return `<div class="repair-step">无法验证的思考记录</div>
+    <div class="repair-note">旧对话里保存了模型加密的思考过程。Claude 等模型经中转站生成的这类记录，ChatGPT 官方后端无法解密，继续对话会报 “encrypted content … could not be verified”。清理后对话文字和工具记录都保留，只是模型看不到之前的隐藏思考。</div>
+    <div class="repair-controls">
+      <label>清理范围 <select data-act="reasoning-scope">
+        <option value="foreign" ${scope === 'foreign' ? 'selected' : ''}>非 OpenAI 生成的（${r.foreign.items} 条 / ${r.foreign.files} 个文件）</option>
+        <option value="all" ${scope === 'all' ? 'selected' : ''}>全部思考记录（${r.all.items} 条 / ${r.all.files} 个文件）</option>
+      </select></label>
+      <button class="btn primary" data-act="reasoning-apply" ${!repairable || busy || scan.invalidFiles.length || !cur.items ? 'disabled' : ''}>${icon('eraser')}清理思考记录</button>
+    </div>`;
+}
+
 function repairCard({ name, title, sub, repairable, scan, busy, ico }) {
   return `<div class="band repair-host" data-host="${esc(name)}">
     <h2>${icon(ico)}${esc(title)} <span class="repair-sub">${esc(sub)}</span></h2>
@@ -232,7 +248,7 @@ function repairCard({ name, title, sub, repairable, scan, busy, ico }) {
       ${busy ? `<span class="busy">${icon('loader-circle', 'spin')}${esc(busy)}...</span>` : ''}
       ${scan ? `<span class="repair-sub">索引 ${sum(scan.database)} 条；文件 ${sum(scan.files)} 个${scan.invalidFiles.length ? `；无法解析 ${scan.invalidFiles.length} 个` : ''}</span>` : '<span class="repair-sub">尚未扫描</span>'}
     </div>
-    ${scan ? modelSection(name, scan, repairable, busy) + providerSection(name, scan, repairable, busy) : ''}
+    ${scan ? modelSection(name, scan, repairable, busy) + reasoningSection(name, scan, repairable, busy) + providerSection(name, scan, repairable, busy) : ''}
   </div>`;
 }
 
@@ -408,6 +424,16 @@ document.addEventListener('click', async (e) => {
     render(true);
     return;
   }
+  if (b.dataset.act === 'reasoning-apply' && repairName) {
+    const scope = ui.reasoningScope[repairName] || 'foreign';
+    const r = repairEntry(repairName).scan.reasoning[scope];
+    const label = repairName === LOCAL ? '本机' : repairName;
+    const tip = repairName === LOCAL ? '请确认 Codex 桌面版已完全退出。' : '远端 app-server 会停止，重新连接时启动。';
+    if (!window.confirm(`清理 ${label} 的思考记录？\n\n${scope === 'all' ? '全部' : '非 OpenAI 生成的'}思考记录 ${r.items} 条，涉及会话文件 ${r.files} 个。\n${tip}修复前自动备份。`)) return;
+    b.disabled = true;
+    await call('repair:reasoning', repairName, scope);
+    return;
+  }
   if (b.dataset.act === 'model-apply' && repairName) {
     const option = ui.modelOptions[repairName];
     const target = option.target;
@@ -445,6 +471,11 @@ document.addEventListener('click', async (e) => {
 
 document.addEventListener('change', async (e) => {
   const t = e.target;
+  if (t.dataset.act === 'reasoning-scope') {
+    const name = hostOf(t);
+    if (name) { ui.reasoningScope[name] = t.value; render(true); }
+    return;
+  }
   if (t.dataset.act === 'model-pick' || t.dataset.act === 'model-target') {
     const name = hostOf(t);
     const option = name && ui.modelOptions[name];

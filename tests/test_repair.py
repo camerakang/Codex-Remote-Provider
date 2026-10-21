@@ -127,6 +127,37 @@ class RepairTests(unittest.TestCase):
         db.close()
         self.assertIn(old, (pathlib.Path(result["backup"]) / "sessions" / "pinned.jsonl").read_text(encoding="utf-8"))
 
+    @patch.object(repair, "stop_app_server")
+    def test_reasoning_cleanup_keeps_lines_and_other_items(self, _stop):
+        claude = {"type": "reasoning", "id": "rs_msg_011C_0", "summary": [], "encrypted_content": "CAQS0wcKEAgT"}
+        openai = {"type": "reasoning", "id": "rs_0d8", "summary": [], "encrypted_content": "gAAAAABpXYZ"}
+        message = {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "reasoning 回答"}]}
+        rows = [
+            {"type": "session_meta", "payload": {"id": "r", "model_provider": "custom"}},
+            {"ordinal": 1, "type": "response_item", "payload": claude},
+            {"ordinal": 2, "type": "response_item", "payload": openai},
+            {"ordinal": 3, "type": "response_item", "payload": message},
+            {"ordinal": 4, "type": "compacted", "payload": {"message": "", "replacement_history": [claude, message]}},
+        ]
+        path = self.root / "sessions" / "r.jsonl"
+        path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+
+        scan = repair.snapshot(self.root)
+        self.assertEqual(scan["reasoning"], {"foreign": {"files": 1, "items": 2}, "all": {"files": 1, "items": 3}})
+        result = repair.repair_reasoning(self.root, {"scope": "foreign", "expected": scan["reasoning"]["foreign"]})
+        self.assertEqual((result["files"], result["items"]), (1, 2))
+        lines = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([l.get("ordinal") for l in lines], [None, 1, 2, 3, 4])
+        self.assertEqual(lines[1]["payload"], {"type": repair.REMOVED_REASONING})
+        self.assertEqual(lines[2]["payload"], openai)
+        self.assertEqual(lines[3]["payload"], message)
+        self.assertEqual(lines[4]["payload"]["replacement_history"], [message])
+        after = repair.snapshot(self.root)["reasoning"]
+        self.assertEqual(after, {"foreign": {"files": 0, "items": 0}, "all": {"files": 1, "items": 1}})
+        result = repair.repair_reasoning(self.root, {"scope": "all", "expected": after["all"]})
+        self.assertEqual(result["items"], 1)
+        self.assertEqual(repair.snapshot(self.root)["reasoning"]["all"], {"files": 0, "items": 0})
+
 
 if __name__ == "__main__":
     pass

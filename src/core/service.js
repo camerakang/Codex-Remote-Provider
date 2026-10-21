@@ -214,6 +214,23 @@ class Service extends EventEmitter {
     });
   }
 
+  async repairReasoning(name, scope) {
+    return this.withBusy(name, '清理思考记录', async () => {
+      try {
+        const result = await repair.applyReasoning(this.host(name), this.repairScans[name], scope);
+        this.log(`[${this.label(name)}] 已清理思考记录 ${result.items} 条（会话文件 ${result.files} 个）；备份: ${result.backup || '无需修改'}`, 'ok');
+        this.setResult(name, true, `已清理思考记录 ${result.items} 条`);
+        this.repairScans[name] = await repair.scan(this.host(name));
+        this.changed();
+        return result;
+      } catch (e) {
+        this.log(`[${this.label(name)}] 清理思考记录失败: ${e.message}`, 'error');
+        this.setResult(name, false, e.message);
+        throw e;
+      }
+    });
+  }
+
   async detectProxy() {
     const s = this.settings();
     const d = await detectLocalProxy(s.localProxyPort);

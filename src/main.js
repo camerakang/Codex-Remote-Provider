@@ -91,6 +91,7 @@ handle('switch', (names, kind, relayId, opts) => svc.switchHosts(names, kind, re
 handle('test', (name) => svc.test(name));
 handle('repair:scan', (name) => svc.scanConversations(name));
 handle('repair:apply', (name, source, model, resetModel) => svc.repairConversations(name, source, model, resetModel));
+handle('repair:reasoning', (name, scope) => svc.repairReasoning(name, scope));
 handle('repair:model', (name, sourceModels, targetModel) => svc.repairModels(name, sourceModels, targetModel));
 handle('proxy:detect', () => svc.detectProxy());
 handle('proxy:set', (name, mode, rport) => svc.setProxyMode(name, mode, rport));
@@ -148,6 +149,10 @@ async function captureAll(dir) {
         await wait(300);
       }
       await win.webContents.executeJavaScript(`(document.querySelector('[data-act=${process.env.CRP_CAPTURE_PICK || 'model-unsupported'}]') || {click() {}}).click()`);
+      if (process.env.CRP_CAPTURE_SCROLL) {
+        await wait(300);
+        await win.webContents.executeJavaScript(`(document.querySelector(${JSON.stringify(process.env.CRP_CAPTURE_SCROLL)}) || {scrollIntoView() {}}).scrollIntoView({ block: 'center' })`);
+      }
     }
     await wait(700);
     const img = await win.webContents.capturePage();

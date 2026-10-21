@@ -1,7 +1,7 @@
-# Codex Remote Provider 1.2.2
+# Codex Remote Provider 1.3.0
 
-- “改为模型”改成下拉选择：自动读取当前登录方式支持的模型（中转站 / Codex++ 读 `model_catalog_json`，官方登录读 `models_cache.json`），默认选中当前配置的模型。当前不是官方登录时，额外列出“官方登录（ChatGPT）”的模型，方便切换前先修好。
-- 旧模型列表里，目标模型所在登录方式不提供的模型会标红；“只选不支持的”一键勾选这些模型（替代原来的“只选 Claude / 聚合模型”）。读不到模型列表时退回手动填写。
-- 保留“全选”和“清空”。
+- 新增“无法验证的思考记录”清理：Claude 等模型经中转站生成的加密思考记录，ChatGPT 官方后端无法解密，切换后继续旧对话会报 `The encrypted content for item rs_msg_… could not be verified`。扫描会统计这类记录，可清理“非 OpenAI 生成的”或“全部思考记录”。
+- 清理时保留对话文字、工具调用和每行记录的序号，只把思考条目替换为 Codex 不会发送给模型的占位记录；压缩历史中的同类条目一并移除。修改前自动备份，失败回滚。
+- 支持本机和远端；修复本机前需完全退出 Codex 桌面版。
 
 修复功能需要 Python 3。Windows 提供安装版和便携版；macOS 提供 Apple Silicon、Intel 的 DMG 和 ZIP。macOS 包未经过 Apple 公证，首次打开时请在 Finder 中右键选择“打开”。

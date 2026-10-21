@@ -111,4 +111,13 @@ async function applyModel(h, scanResult, sourceModels, targetModel) {
   return run(h, 'repair-model', { sourceModels, targetModel, expected }, 300000);
 }
 
-module.exports = { scan, apply, applyModel, providerOf, LOCAL };
+// Neutralise encrypted reasoning the target backend cannot verify (e.g. Claude thinking via a relay).
+async function applyReasoning(h, scanResult, scope) {
+  if (!scanResult || !scanResult.reasoning) throw new Error('请先扫描');
+  if (!['foreign', 'all'].includes(scope)) throw new Error('清理范围不正确');
+  if (scanResult.invalidFiles.length) throw new Error('存在无法解析的会话文件，已停止修复');
+  const expected = scanResult.reasoning[scope];
+  return run(h, 'repair-reasoning', { scope, expected }, 300000);
+}
+
+module.exports = { scan, apply, applyModel, applyReasoning, providerOf, LOCAL };
