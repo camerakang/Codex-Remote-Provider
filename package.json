@@ -1,7 +1,7 @@
 {
   "name": "codex-remote-provider",
   "productName": "Codex Remote Provider",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Switch SSH remote Codex hosts between official login and relay, and share the local proxy.",
   "author": "45996",
   "private": true,
@@ -23,10 +23,21 @@
   "build": {
     "appId": "local.codex.remote-provider",
     "productName": "Codex Remote Provider",
-    "directories": { "output": "dist", "buildResources": "build" },
-    "files": ["src/**/*", "build/icon.png", "node_modules/lucide/dist/umd/lucide.min.js", "package.json"],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "build/icon.png",
+      "node_modules/lucide/dist/umd/lucide.min.js",
+      "package.json"
+    ],
     "win": {
-      "target": ["nsis", "portable"],
+      "target": [
+        "nsis",
+        "portable"
+      ],
       "icon": "build/icon.png"
     },
     "portable": {
@@ -42,8 +53,20 @@
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png",

@@ -60,7 +60,8 @@ async function status(h) {
     online: true, checkedAt: Date.now(),
     home: kv.HOME, client: kv.CLIENT || null, login: kv.LOGIN,
     appServer: kv.APP || null, appProxy: kv.APPPROXY || null, proxyBlock: kv.BLOCK || null,
-    kind: p ? p.kind : 'unknown', model: p ? p.model : null, baseUrl: p ? p.baseUrl : null,
+    kind: p ? p.kind : 'unknown', provider: p ? p.provider : null,
+    model: p ? p.model : null, baseUrl: p ? p.baseUrl : null,
     configText,
   };
 }

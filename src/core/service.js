@@ -4,6 +4,7 @@ const fs = require('fs');
 const { EventEmitter } = require('events');
 const cfg = require('./config');
 const remote = require('./remote');
+const repair = require('./repair');
 const { detectLocalProxy, connectTest, TunnelManager } = require('./proxy');
 
 const isPrivateIp = (ip) => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.)/.test(ip || '');
@@ -15,6 +16,7 @@ class Service extends EventEmitter {
     this.status = {};
     this.busy = {};
     this.lastResult = {};
+    this.repairScans = {};
     this.logs = [];
     this.localProxy = null;
     this.tunnels = new TunnelManager((m, l) => this.log(m, l));
@@ -65,6 +67,7 @@ class Service extends EventEmitter {
         status: this.status[h.name] ? { ...this.status[h.name], configText: undefined } : null,
         busy: this.busy[h.name] || null,
         result: this.lastResult[h.name] || null,
+        repairScan: this.repairScans[h.name] || null,
         proxy: this.proxyOf(h.name),
         tunnel: this.tunnels.state(h.name),
       })),
@@ -117,6 +120,7 @@ class Service extends EventEmitter {
         this.log(`[${name}] 切换到 ${label}${target.model ? `，模型 ${target.model}` : ''}${dryRun ? ' (预演)' : ''}`);
         const r = await remote.switchProvider(h, target, { dryRun });
         if (dryRun) { r.preview.forEach((l) => this.log(`    ${l}`)); this.setResult(name, true, '预演完成'); return; }
+        delete this.repairScans[name];
         this.log(`[${name}] 完成，备份 config.toml.bak-${r.stamp}，已重启远端 app-server`, 'ok');
         this.setResult(name, true, `已切到${target.kind === 'relay' ? '中转站' : '官方'}`);
         await this.refreshHost(name).catch(() => {});
@@ -146,6 +150,43 @@ class Service extends EventEmitter {
   }
 
   async test(name) { return this.withBusy(name, '实测', () => this.runTest(name)); }
+
+  async scanConversations(name) {
+    return this.withBusy(name, '扫描会话', async () => {
+      try {
+        const result = await repair.scan(this.host(name));
+        this.repairScans[name] = result;
+        this.changed();
+        const outdated = Object.entries(result.database)
+          .filter(([provider]) => provider !== result.targetProvider)
+          .reduce((sum, [, count]) => sum + count, 0);
+        this.log(`[${name}] 会话扫描完成：索引中 ${outdated} 条供应商不匹配，无法解析的文件 ${result.invalidFiles.length} 个`);
+        return result;
+      } catch (e) {
+        delete this.repairScans[name];
+        this.changed();
+        this.log(`[${name}] 会话扫描失败: ${e.message}`, 'error');
+        throw e;
+      }
+    });
+  }
+
+  async repairConversations(name, source, model, resetModel) {
+    return this.withBusy(name, '修复会话', async () => {
+      try {
+        const result = await repair.apply(this.host(name), this.repairScans[name], source, model, resetModel);
+        this.log(`[${name}] 已修复索引 ${result.database} 条、会话文件 ${result.files} 个；备份: ${result.backup || '无需修改'}`, 'ok');
+        this.setResult(name, true, `会话已修复 ${result.database} 条索引 / ${result.files} 个文件`);
+        this.repairScans[name] = await repair.scan(this.host(name));
+        this.changed();
+        return result;
+      } catch (e) {
+        this.log(`[${name}] 会话修复失败: ${e.message}`, 'error');
+        this.setResult(name, false, e.message);
+        throw e;
+      }
+    });
+  }
 
   async detectProxy() {
     const s = this.settings();

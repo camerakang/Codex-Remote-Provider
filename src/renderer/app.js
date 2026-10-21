@@ -10,11 +10,11 @@ const KIND = {
   offline: ['离线', 'k-offline'], unknown: ['未知', 'k-unknown'], checking: ['检测中', 'k-checking'],
 };
 const PROXY_MODE = { off: '关闭', lan: '局域网', tunnel: '隧道' };
-const TITLES = { hosts: '远端主机', proxy: '本地代理', logs: '日志', settings: '设置' };
+const TITLES = { hosts: '远端主机', repair: '修复旧对话', proxy: '本地代理', logs: '日志', settings: '设置' };
 
 const ui = {
   page: 'hosts', snap: null, logs: [],
-  target: 'official', relayId: null, selected: null, pending: false,
+  target: 'official', relayId: null, selected: null, pending: false, repairOptions: {},
 };
 
 function toast(msg, kind = 'error') {
@@ -123,6 +123,53 @@ function renderHosts() {
   return `<div class="grid">${hosts.map(hostCard).join('')}</div>`;
 }
 
+/* ---------- conversation repair page ---------- */
+function renderRepair() {
+  const hosts = ui.snap.hosts;
+  if (!hosts.length) return '<div class="empty">Codex 中没有 SSH 远程连接</div>';
+  const intro = `<div class="band">
+    <h2>${icon('history')}修复供应商切换后的旧对话</h2>
+    <div class="repair-note">先扫描远端索引和会话文件，再选择旧供应商。修复会把选中的旧记录改为该主机当前供应商，并可重置索引中的旧模型。历史消息与历史回合记录不会改写。</div>
+    <div class="repair-note">修复时会停止远端 app-server，相关聊天会暂时断开；重新连接时 Codex 会启动服务。修改前会在远端 <code>~/.codex/provider-sync/repair-backups/</code> 保存数据库和命中的会话文件。</div>
+  </div>`;
+  return intro + hosts.map((h) => {
+    const st = h.status, scan = h.repairScan;
+    const online = st && st.online;
+    const repairable = online && (st.kind === 'official' || st.kind === 'relay');
+    const counts = scan ? [...new Set([...Object.keys(scan.database), ...Object.keys(scan.files)])]
+      .filter((p) => p !== scan.targetProvider).sort() : [];
+    let option = ui.repairOptions[h.name];
+    if (scan && (!option || option.targetProvider !== scan.targetProvider || !counts.includes(option.source))) {
+      option = { targetProvider: scan.targetProvider, source: counts.includes('custom') ? 'custom' : counts[0],
+        resetModel: true, model: scan.targetModel || '' };
+      ui.repairOptions[h.name] = option;
+    }
+    const source = option && option.source;
+    const dbCount = scan && source ? scan.database[source] || 0 : 0;
+    const fileCount = scan && source ? scan.files[source] || 0 : 0;
+    const invalid = scan ? scan.invalidFiles.length : 0;
+    const opts = counts.map((p) => `<option value="${esc(p)}" ${p === source ? 'selected' : ''}>${esc(p)} · 索引 ${scan.database[p] || 0} / 文件 ${scan.files[p] || 0}</option>`).join('');
+    const busy = !!h.busy;
+    return `<div class="band repair-host" data-host="${esc(h.name)}">
+      <h2>${icon('server')}${esc(h.name)} <span class="repair-sub">${repairable ? '当前供应商 ' + esc(scan ? scan.targetProvider : st.provider || 'openai') : online ? '供应商配置不可识别' : '离线'}</span></h2>
+      <div class="repair-controls">
+        <button class="btn" data-act="repair-scan" ${!repairable || busy ? 'disabled' : ''}>${icon('scan-search')}扫描旧对话</button>
+        ${busy ? `<span class="busy">${icon('loader-circle', 'spin')}${esc(h.busy)}...</span>` : ''}
+        ${scan ? `<span class="repair-sub">索引 ${Object.values(scan.database).reduce((a,b) => a+b,0)} 条；文件 ${Object.values(scan.files).reduce((a,b) => a+b,0)} 个${invalid ? `；无法解析 ${invalid} 个` : ''}</span>` : '<span class="repair-sub">尚未扫描</span>'}
+      </div>
+      ${scan ? `<div class="repair-controls">
+        <label>旧供应商 <select data-act="repair-source" ${counts.length ? '' : 'disabled'}>${opts || '<option>无不匹配记录</option>'}</select></label>
+        <label class="switch"><input type="checkbox" data-act="repair-reset" ${option.resetModel ? 'checked' : ''}><span class="track"></span>重置索引模型</label>
+        <input type="text" data-act="repair-model" value="${esc(option.model)}" placeholder="留空清除旧索引模型" ${option.resetModel ? '' : 'disabled'}>
+      </div>
+      <div class="repair-controls">
+        <span class="repair-sub">本次将修改索引 ${dbCount} 条、文件 ${fileCount} 个${invalid ? '；存在无法解析的文件，修复已禁用' : ''}</span>
+        <button class="btn primary" data-act="repair-apply" ${!repairable || busy || invalid || !source || dbCount + fileCount === 0 ? 'disabled' : ''}>${icon('wrench')}修复此主机</button>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+}
+
 /* ---------- proxy page ---------- */
 function renderProxy() {
   const s = ui.snap, lp = s.localProxy;
@@ -218,13 +265,14 @@ function render(force) {
   renderSide();
   const actions = {
     hosts: hostsActions,
+    repair: () => '',
     proxy: () => `<button class="icon-btn" id="refreshAll" data-tip="刷新全部">${icon('refresh-cw')}</button>`,
     logs: () => `<button class="btn" id="openLog">${icon('folder-open')}日志文件</button><button class="btn" id="clearLog">${icon('trash-2')}清空</button>`,
     settings: () => '',
   }[ui.page]();
   $('#pageActions').innerHTML = actions;
   const scroll = $('#content').scrollTop;
-  $('#content').innerHTML = { hosts: renderHosts, proxy: renderProxy, logs: renderLogs, settings: renderSettings }[ui.page]();
+  $('#content').innerHTML = { hosts: renderHosts, repair: renderRepair, proxy: renderProxy, logs: renderLogs, settings: renderSettings }[ui.page]();
   $('#content').scrollTop = ui.page === 'logs' ? $('#content').scrollHeight : scroll;
   window.lucide.createIcons();
 }
@@ -240,6 +288,19 @@ document.addEventListener('click', async (e) => {
   if (b.id === 'applyBtn') {
     const names = selectedNames();
     call('switch', names, ui.target, ui.relayId, { test: ui.snap.settings.testAfterSwitch });
+    return;
+  }
+  const repairName = hostOf(b);
+  if (b.dataset.act === 'repair-scan' && repairName) { await call('repair:scan', repairName); return; }
+  if (b.dataset.act === 'repair-apply' && repairName) {
+    const row = b.closest('.repair-host');
+    const source = row.querySelector('[data-act=repair-source]').value;
+    const model = row.querySelector('[data-act=repair-model]').value.trim();
+    const reset = row.querySelector('[data-act=repair-reset]').checked;
+    const scan = ui.snap.hosts.find((h) => h.name === repairName).repairScan;
+    if (!window.confirm(`修复 ${repairName} 的旧对话？\n\n将 ${source} 改为当前供应商 ${scan.targetProvider}；索引 ${scan.database[source] || 0} 条、会话文件 ${scan.files[source] || 0} 个。远端 app-server 会停止，重新连接时启动。修复前自动备份。`)) return;
+    b.disabled = true;
+    await call('repair:apply', repairName, source, model, reset);
     return;
   }
   if (b.id === 'proxyDetect') {
@@ -268,6 +329,16 @@ document.addEventListener('click', async (e) => {
 
 document.addEventListener('change', async (e) => {
   const t = e.target;
+  if (['repair-source', 'repair-reset', 'repair-model'].includes(t.dataset.act)) {
+    const name = hostOf(t);
+    if (name && ui.repairOptions[name]) {
+      ui.repairOptions[name].source = t.closest('.repair-host').querySelector('[data-act=repair-source]').value;
+      ui.repairOptions[name].resetModel = t.closest('.repair-host').querySelector('[data-act=repair-reset]').checked;
+      ui.repairOptions[name].model = t.closest('.repair-host').querySelector('[data-act=repair-model]').value.trim();
+      render(true);
+    }
+    return;
+  }
   if (t.id === 'relaySel') { ui.relayId = t.value; return; }
   if (t.id === 'testToggle') { await call('settings', { testAfterSwitch: t.checked }); return; }
   if (t.dataset.set) { await call('settings', { [t.dataset.set]: t.checked }); return; }

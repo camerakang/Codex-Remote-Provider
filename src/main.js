@@ -3,6 +3,11 @@ const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, nativeTheme
 const path = require('path');
 const { Service } = require('./core/service');
 
+if (process.env.CRP_CAPTURE) {
+  const captureProfile = path.join(process.env.CRP_CAPTURE, 'profile');
+  require('fs').mkdirSync(captureProfile, { recursive: true });
+  app.setPath('userData', captureProfile);
+}
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
 
 const svc = new Service();
@@ -84,6 +89,8 @@ handle('refresh', (names) => (names && names.length
   : svc.refreshAll()));
 handle('switch', (names, kind, relayId, opts) => svc.switchHosts(names, kind, relayId, opts || {}));
 handle('test', (name) => svc.test(name));
+handle('repair:scan', (name) => svc.scanConversations(name));
+handle('repair:apply', (name, source, model, resetModel) => svc.repairConversations(name, source, model, resetModel));
 handle('proxy:detect', () => svc.detectProxy());
 handle('proxy:set', (name, mode, rport) => svc.setProxyMode(name, mode, rport));
 handle('proxy:test', (name) => svc.proxyTest(name));
@@ -116,7 +123,8 @@ app.whenReady().then(() => {
   createWindow();
   createTray();
   svc.log(`启动 v${app.getVersion()} (${process.platform})`);
-  svc.detectProxy().then(() => svc.restoreTunnels()).catch((e) => svc.log(`代理检测失败: ${e.message}`, 'error'));
+  svc.detectProxy().then(() => { if (!process.env.CRP_CAPTURE) svc.restoreTunnels(); })
+    .catch((e) => svc.log(`代理检测失败: ${e.message}`, 'error'));
   svc.refreshAll();
   if (process.env.CRP_CAPTURE) captureAll(process.env.CRP_CAPTURE);
 });
@@ -127,8 +135,12 @@ async function captureAll(dir) {
   fs.mkdirSync(dir, { recursive: true });
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   await wait(Number(process.env.CRP_CAPTURE_WAIT || 12000));
-  for (const page of ['hosts', 'proxy', 'logs', 'settings']) {
+  for (const page of ['hosts', 'repair', 'proxy', 'logs', 'settings']) {
     await win.webContents.executeJavaScript(`document.querySelector('.nav[data-page=${page}]').click()`);
+    if (page === 'repair') {
+      const host = svc.activeHosts().find((h) => h.name === 'forlinx');
+      if (host) await svc.scanConversations(host.name).catch(() => {});
+    }
     await wait(700);
     const img = await win.webContents.capturePage();
     fs.writeFileSync(path.join(dir, `${page}.png`), img.toPNG());
